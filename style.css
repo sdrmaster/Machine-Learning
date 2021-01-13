@@ -1,0 +1,11 @@
+div.main-container {
+  max-width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.shiny-frame{
+  width: 1900px;
+  height: 1200px;
+}
+

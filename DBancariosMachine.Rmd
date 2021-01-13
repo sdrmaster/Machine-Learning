@@ -1,0 +1,1720 @@
+---
+runtime: shiny
+output:
+  html_document:
+    css: style.css
+resource_files:
+- predictionridge.csv
+---
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+bancariosML <- function(data = data,y,framework = "h2o", share_app = FALSE,port = NULL){
+  
+  require(shiny)
+  require(argonDash)
+  require(argonR)
+  require(dygraphs)
+  require(data.table)
+  require(ggplot2)
+  require(shinycssloaders)
+  require(sparklyr)
+  require(dplyr)
+  require(tidyr)
+  library(DT)
+  require(h2o)
+  require(plotly)
+  require(shinyWidgets)
+  require(shinyjs)
+  require(stats)
+  require(lubridate)
+  require(graphics)
+  
+  ## ---------------------------------------------------------------------------- Inicializando -----------------------------------
+  
+  # regrese un error si el framework seleccionado no es h2o ni spark
+  if(!(framework %in% c("h2o","spark"))){stop("El framework de Machine Learning debe seleccionarse entre h2o o spark")}
+  
+  #Convertir el dataset elegido como input en un objeto data.table 
+  data <- data.table(data) 
+  
+  # Reemplace puntos en las features
+  colnames(data) <- gsub("\\.","_",colnames(data))
+  
+  # Reemplace puntos en la y
+  y <- gsub("\\.","_",y)
+  
+  # Regrese un error si y no está contenida en las columnas de la base de datosReturn an error 
+  if (!(y %in% colnames(data))){
+    stop("La variable y debe estar contenida en la base de datos")
+  }
+  
+  # Muestre un error si y no es numérica
+  if (!(eval(parse(text = paste0("class(data$",y,")"))) == "numeric")){
+    stop("La variable y debe ser númerica")
+  }
+  
+  # Asigne x como feature 
+  x <- setdiff(colnames(data),y)
+  
+  # Muestre un error si el dataset que se está utilizando tiene más de 1 millón de filas
+  if (nrow(data) > 1000000) {
+    stop("La base de datos usado como input no debe tener más de 1 millón de filas")
+  }
+  
+  # No imprima el mensaje de summarize () 
+  options(dplyr.summarise.inform=F)
+  
+  # Inicialice todos los valores reactivos
+  model <- reactiveValues()
+  train_1 <- reactiveValues()
+  test_1 <- reactiveValues() 
+  test_2 <- reactiveValues()
+  v_neural <- reactiveValues(type_model = NA)
+  v_grad <- reactiveValues(type_model = NA)
+  v_glm <- reactiveValues(type_model = NA)
+  v_decision_tree <- reactiveValues(type_model = NA)
+  v_random <- reactiveValues(type_model = NA)
+  v_auto_ml <- reactiveValues(type_model = NA)
+  parameter <- reactiveValues()
+  
+  # Inicialice tablas para calcular los tiempos de los modelos
+  time_gbm <- data.table()
+  time_random_forest <- data.table()
+  time_glm <- data.table()
+  time_decision_tree <- data.table()
+  time_neural_network <- data.table()
+  time_auto_ml <- data.table()
+  
+  # Inicialice tablas para la importancia de las features en cada modelo
+  importance_gbm <- data.table()
+  importance_decision_tree <- data.table()
+  importance_random_forest <- data.table()
+  importance_neural_network <- data.table()
+  
+  # Inicialice tablas los valores escalares
+  scaled_importance <- NULL
+  variable <- NULL
+  Predicted_value <- NULL
+  Model <- NULL
+  `.` <- NULL
+  `MAPE(%)` <- NULL
+  Counter <- NULL
+  feature <- NULL
+  importance <- NULL
+  fit <- NULL
+  prediction <- NULL
+  
+  ## ---------------------------------------------------------------------------- UI  -----------------------------------
+  
+  # Defina barra de navegación
+  argonNav  <- argonDashNavbar(
+    argonDropNav(
+      title = HTML(paste0("<font color='black'>DBancarios</font>")), 
+      src = "https://zupimages.net/up/20/48/7amf.png", 
+      orientation = "left"
+    )
+  )
+  
+  # Defina footer
+  argonFooter <- argonDashFooter(
+    copyrights = "@DBancarios",
+    src = "https://twitter.com/DBancarios",
+    argonFooterMenu(
+      argonFooterItem("GitHub", src = "https://github.com/sdrmaster/Dbancarios")
+    )
+  )
+  
+  # Defina DashHeader para las tarjetas de información
+  dashheader_framework <- argonDashHeader(
+    gradient = TRUE,
+    color = "danger",
+    separator = FALSE,
+    argonRow(
+      argonColumn(width = "20%",
+                  argonInfoCard(value = "Regresiones",gradient = TRUE,width = 12,
+                                title = "Machine learning con datos Bancarios MX",
+                                icon = icon("chart-bar"), 
+                                icon_background = "red",
+                                background_color = "lightblue"
+                  )
+      ),
+      argonColumn(width = "20%",uiOutput("framework_used")),
+      argonColumn(width = "20%",uiOutput("framework_memory")),
+      argonColumn(width = "20%",uiOutput("framework_cpu")),
+      argonColumn(width = "20%",uiOutput("dataset_infoCard"))
+    )
+  )
+  
+  # Defina DashHeader para la ventana "Explore sus datos"  
+  dashheader_explore_input <-  argonDashHeader(
+    gradient = FALSE,
+    color = "info",
+    separator = FALSE,
+    div(align = "center",
+        argonButton(
+          name = HTML("<font size='+1'>&nbsp;  Explore sus datos </font>"),
+          status = "info",
+          icon = icon("chart-area"),
+          size = "lg",
+          toggle_modal = TRUE,
+          modal_id = "modal_exlore_input_data"
+        ),
+        argonModal(
+          id = "modal_exlore_input_data",
+          title = HTML("<b>EXPLORE SUS DATOS DBANCARIOS</b>"),
+          status = "info",
+          gradient = TRUE,
+          br(),
+          HTML("<b>La idea es predecir las remesas nacionales, pero incluimos otras variables para ver la relación de las remesas con el consumo y la inversión. Antes de ejecutar modelos de aprendizaje automático, puede ser útil inspeccionar la distribución de cada variable y tener una idea de las dependencias entre las variables explicativas.</b>"),
+          br(),br(),
+          icon("tools"),icon("tools"),icon("tools"),
+          br(),br(),
+          HTML("Esta sección permite graficar la variación de cada variable en función de otra, verificar clases de variables explicativas, graficar histogramas de cada distribución y mostrar la matriz de correlación entre todas las variables.<br><br> 
+          Consumo=Indice mensual de consumo privado, V_Consumo=Variación porcentual de Consumo. Inversión=Indice mensual de inversión fija bruta. V_Inversión=Variación porcentual de Inversión. Tasa_Cambio=Tasa de Cambio de pesos por dólar.TIIE28=Tasa de interés interbancaria de equilibrio a 28 días. Rezago_Rem=Rezago de Remesas")
+        )
+    ),
+    br(),
+    argonRow(
+      argonColumn(width = 9,
+                  argonCard(width = 12,
+                            hover_lift = TRUE,
+                            shadow = TRUE,
+                            argonTabSet(width = 12,
+                                        id = "tab_input_data",
+                                        card_wrapper = TRUE,
+                                        horizontal = TRUE,
+                                        circle = FALSE,
+                                        size = "sm",
+                                        iconList = list(argonIcon("cloud-upload-96"), argonIcon("bell-55"), argonIcon("calendar-grid-58"),argonIcon("calendar-grid-58")),
+                                        argonTab(tabName = "Explore su base de datos",
+                                                 active = TRUE,
+                                                 argonRow(
+                                                   argonColumn(width = 6,div(align = "center",uiOutput("X_axis_explore_dataset"))),
+                                                   argonColumn(width = 6,div(align = "center",selectInput(inputId = "y_variable_input_curve",label = "Variable en el eje Y",choices = colnames(data),selected = y)))
+                                                 ), 
+                                                 br(),
+                                                 br(),
+                                                 br(),
+                                                 withSpinner(plotlyOutput("explore_dataset_chart",width = "100%",height = "120%"))
+                                        ),
+                                        argonTab(tabName = "Estadísticas de Resumen",
+                                                 active = FALSE,
+                                                 fluidRow( 
+                                                   argonColumn(width = 4,
+                                                               br(),
+                                                               br(),
+                                                               withSpinner(DTOutput("variables_class_input", height = "100%", width = "100%"))
+                                                   ),
+                                                   argonColumn(width = 8,
+                                                               div(align = "center",
+                                                                   radioButtons(inputId = "input_var_graph_type",label = "",choices = c("Histogram","Boxplot","Autocorrelation"),selected = "Histogram",inline = T)
+                                                               ),
+                                                               div(align = "center",uiOutput("message_autocorrelation")),
+                                                               withSpinner(plotlyOutput("variable_boxplot", height = "100%", width = "100%")))
+                                                 )
+                                                 
+                                        ),
+                                        argonTab(tabName = "Matriz de Correlación",
+                                                 active = FALSE,
+                                                 withSpinner(plotlyOutput("correlation_matrix", height = "100%", width = "100%"))
+                                        )
+                            )
+                  )
+      ),
+      argonColumn(width = 3,
+                  argonCard(width = 12,src = NULL,hover_lift = T,shadow = TRUE,
+                            div(align = "center",
+                                argonColumn(width = 6,uiOutput("Time_series_checkbox")),
+                                argonColumn(width = 6,uiOutput("time_series_column")),
+                                uiOutput("Variables_input_selection"),
+                                uiOutput("slider_time_series_train"),
+                                uiOutput("slider_time_series_test"),
+                                uiOutput("slider_percentage"),
+                                uiOutput("message_nrow_train_dataset")
+                            )
+                  )
+      )
+    )
+  )
+  
+  
+  # Defina DashHeader para la ventana "Exploración de resultados"  
+  dashheader_explore_results <- argonDashHeader(gradient = TRUE,
+                                                color = "primary",
+                                                separator = FALSE,
+                                                div(align = "center",
+                                                    argonButton(
+                                                      name = HTML("<font size='+1'>&nbsp; Exploración de resultados</font>"),
+                                                      status = "primary",
+                                                      icon = icon("list-ol"),
+                                                      size = "lg",
+                                                      toggle_modal = TRUE,
+                                                      modal_id = "modal_explore_results"
+                                                    ),
+                                                    argonModal(
+                                                      id = "modal_explore_results",
+                                                      title = HTML("<b>EXPLORE SUS RESULTADOS</b>"),
+                                                      status = "primary",
+                                                      gradient = TRUE,
+                                                      br(),
+                                                      HTML("<b>Una vez que se han lanzado los modelos de aprendizaje automático, esta sección se puede utilizar para comparar su desempeño en el conjunto de datos de prueba.</b>"),
+                                                      br(),br(),
+                                                      icon("tools"),icon("tools"),icon("tools"),
+                                                      br(),br(),
+                                                      HTML("Puede verificar las matrices de confusión para obtener resultados de clasificación para cada modelo o tener una descripción general de la métrica de error en la pestaña 'Comparar rendimientos de los modelos'.<br><br>
+                                                           Tenga en cuenta que las características importantes de cada modelo están disponibles en la pestaña correspondiente.")
+                                                    )
+                                                ),
+                                                br(),
+                                                argonRow(
+                                                  argonCard(width = 12,
+                                                            title = "Predicciones con los datos de prueba (test data)",
+                                                            src = NULL,
+                                                            hover_lift = TRUE,
+                                                            shadow = TRUE,
+                                                            icon = icon("cogs"),
+                                                            status = "danger",
+                                                            argonTabSet(
+                                                              width = 12,
+                                                              id = "results_models",
+                                                              card_wrapper = TRUE,
+                                                              horizontal = TRUE,
+                                                              circle = FALSE,
+                                                              size = "sm",
+                                                              iconList = list(argonIcon("cloud-upload-96"), argonIcon("bell-55"), argonIcon("calendar-grid-58"),argonIcon("calendar-grid-58")),
+                                                              argonTab(
+                                                                tabName = "Gráficos de Resultados sobre los datos de prueba",
+                                                                active = TRUE,
+                                                                withSpinner(dygraphOutput("output_curve",  width = "100%")),
+                                                                br(),
+                                                                div(align = "center",
+                                                                    switchInput(label = "Modo gráfico de barras",inputId = "bar_chart_mode",value = TRUE)
+                                                                )
+                                                              ),
+                                                              argonTab(
+                                                                tabName = "Compare los desempeños de los modelos",
+                                                                active = FALSE,
+                                                                div(align = "center",
+                                                                    br(),
+                                                                    br(),
+                                                                    uiOutput("message_compare_models_performances")
+                                                                ),
+                                                                withSpinner(DTOutput("score_table"))
+                                                              ),
+                                                              argonTab(tabName = "Importancia de la feature",
+                                                                       active = FALSE,
+                                                                       div(align = "center",
+                                                                           br(),
+                                                                           br(),
+                                                                           uiOutput("message_feature_importance"),
+                                                                           uiOutput("feature_importance_glm_message")),
+                                                                       withSpinner(plotlyOutput("feature_importance",height = "100%"))
+                                                                       
+                                                              ),
+                                                              argonTab(tabName = "Tabla de resultados",
+                                                                       active = FALSE,
+                                                                       withSpinner(DTOutput("table_of_results"))
+                                                              )
+                                                            ),
+                                                            br(),
+                                                            br()
+                                                  )
+                                                )
+  )
+  
+  # Definamos sección específica UI si el framework H2O se selecciona
+  if(framework == "h2o"){
+    
+    # Run h2o instance (might require to unset proxy authentication credentials )
+    
+    invisible(Sys.setenv(http_proxy=""))
+    invisible(Sys.setenv(http_proxy_user=""))
+    invisible(Sys.setenv(https_proxy_user=""))
+    invisible(h2o.init())
+    invisible(h2o::h2o.no_progress())
+    cluster_status <- h2o.clusterStatus()
+    
+    # Defina DashHeader para  la ventana de"Configurar parametros y correr modelos" (bako H2o)
+    dashheader_select_parameters <- argonDashHeader(gradient = TRUE,
+                                                    color = "default",
+                                                    separator = FALSE,
+                                                    div(align = "center",
+                                                        argonButton(
+                                                          name = HTML("<font size='+1'>&nbsp; Configurar parámetros y ejecutar modelos</font>"),
+                                                          status = "default",
+                                                          icon = icon("tools"),
+                                                          size = "lg",
+                                                          toggle_modal = TRUE,
+                                                          modal_id = "modal_configure_parameters"
+                                                        ),
+                                                        argonModal(
+                                                          id = "modal_configure_parameters",
+                                                          title = HTML("<b>CONFIGURE PARAMETERS</b>"),
+                                                          status = "default",
+                                                          gradient = TRUE,
+                                                          br(),
+                                                          HTML("<b>Configure parámetros y ejecute modelos.</b>"),
+                                                          br(),br(),
+                                                          icon("tools"),icon("tools"),icon("tools"),
+                                                          br(),br(),
+                                                          HTML("Puede seleccionar la configuración de hiperparámetros para cada modelo de aprendizaje automático utilizando cursores diferentes..<br><br> 
+                                                               Cada modelo se puede correr por separado haciendo click en el botón correspondiente; También puede iniciar todos los modelos simultáneamente con el botón 'Ejecutar todos los modelos'<br><br>
+                                                               Tenga en cuenta que el algoritmo autoML encontrará automáticamente el mejor algoritmo que se adapte a su tarea de regresión:
+                                                               Usted será informado de la técnica de aprendizaje automático utilizada y sabrá qué hiperparámetros deben configurarse.
+                                                               ")
+                                                        )
+                                                    ),
+                                                    br(),
+                                                    argonRow(
+                                                      argonColumn(width = 6,div(align = "center",uiOutput("h2o_cluster_mem"))),
+                                                      argonColumn(width = 6,div(align = "center",uiOutput("h2o_cpu")))
+                                                    ),
+                                                    argonRow(
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "success",
+                                                                title = "Regresión Lineal Generalizada",
+                                                                div(align = "center",
+                                                                    argonRow(
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Familia",inputId = "glm_family",choices = c("gaussian","poisson", "gamma","tweedie"),selected = "gaussian")
+                                                                      ),
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Link",inputId = "glm_link",choices = c("identity","log"),selected = "identity"),
+                                                                                  switchInput(label = "Intercepto",inputId = "intercept_term_glm",value = TRUE,width = "auto")
+                                                                      )
+                                                                    ),
+                                                                    sliderInput(label = "Lambda",inputId = "reg_param_glm",min = 0,max = 10,value = 0),
+                                                                    sliderInput(label = "Alpha (0:Ridge <-> 1:Lasso)",inputId = "alpha_param_glm",min = 0,max = 1,value = 0.5),
+                                                                    sliderInput(label = "Maximas iteraciones",inputId = "max_iter_glm",min = 50,max = 300,value = 100),
+                                                                    actionButton("run_glm","Correr glm",style = 'color:white; background-color:green; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "danger",
+                                                                title = "Random Forest",
+                                                                div(align = "center",
+                                                                    sliderInput(label = "Número de árboles",min = 1,max = 100, inputId = "num_tree_random_forest",value = 50),
+                                                                    sliderInput(label = "Tasa de submuestreo",min = 0.1,max = 1, inputId = "subsampling_rate_random_forest",value = 0.6),
+                                                                    sliderInput(label = "Profundidad Máx",min = 1,max = 50, inputId = "max_depth_random_forest",value = 20),
+                                                                    sliderInput(label = "Número de bins",min = 2,max = 100, inputId = "n_bins_random_forest",value = 20),
+                                                                    actionButton("run_random_forest","Correr Random forest",style = 'color:white; background-color:red; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "primary",
+                                                                title = "Red Neuronal",
+                                                                div(align = "center",
+                                                                    argonRow(
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Funciones de activación",inputId = "activation_neural_net",choices = c( "Rectifier", "Maxout","Tanh", "RectifierWithDropout", "MaxoutWithDropout","TanhWithDropout"),selected = "Rectifier")
+                                                                      ),
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Función de pérdida",inputId = "loss_neural_net",choices = c("Automatic", "Quadratic", "Huber", "Absolute", "Quantile"),selected = "Automatic")
+                                                                      )
+                                                                    ),
+                                                                    textInput(label = "Layers escondidas",inputId = "hidden_neural_net",value = "c(200,200)"),
+                                                                    sliderInput(label = "Epochs",min = 10,max = 100, inputId = "epochs_neural_net",value = 10),
+                                                                    sliderInput(label = "Tasa de aprendizaje",min = 0.001,max = 0.1, inputId = "rate_neural_net",value = 0.005),
+                                                                    actionButton("run_neural_network","Correr Red Neuronal",style = 'color:white; background-color:darkblue; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                                
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "warning",
+                                                                title = "Potenciación del gradiente",
+                                                                div(align = "center",
+                                                                    sliderInput(label = "Profundidad Máx",min = 1,max = 20, inputId = "max_depth_gbm",value = 5),
+                                                                    sliderInput(label = "Número de árboles",min = 1,max = 100, inputId = "n_trees_gbm",value = 50),
+                                                                    sliderInput(label = "Tasa de muestreo",min = 0.1,max = 1, inputId = "sample_rate_gbm",value = 1),
+                                                                    sliderInput(label = "Tasa de aprendizaje",min = 0.1,max = 1, inputId = "learn_rate_gbm",value = 0.1),
+                                                                    actionButton("run_gradient_boosting","Correr modelo",style = 'color:white; background-color:orange; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      )
+                                                    ),
+                                                    argonRow(
+                                                      argonColumn(width = 6,
+                                                                  argonCard(width = 12,
+                                                                            icon = icon("cogs"),
+                                                                            status = "warning",
+                                                                            title = "Compare todos los modelos",
+                                                                            div(align = "center",
+                                                                                argonH1("Dar click para correr los cuatro modelos",display = 4),
+                                                                                argonH1(HTML("<small><i> Los cuatro modelos se ajustarán de acuerdo a los parámetros seleccionados</i></small>"),display = 4), 
+                                                                                br(),
+                                                                                br(),
+                                                                                actionBttn(label = "Correr todos los modelos!",inputId = "train_all",color = "primary", icon = icon("cogs",lib = "font-awesome")),
+                                                                                br()
+                                                                            )
+                                                                  )
+                                                      ),
+                                                      argonColumn(width = 6,
+                                                                  argonCard(width = 12,icon = icon("cogs"),status = "warning", title = "Auto Machine Learning",
+                                                                            div(align = "center",
+                                                                                prettyCheckboxGroup(
+                                                                                  inputId = "auto_ml_autorized_models",
+                                                                                  label = HTML("<b>Búsqueda Autorizada</b>"), 
+                                                                                  choices = c("DRF", "GLM", "XGBoost", "GBM", "DeepLearning"),
+                                                                                  selected = c("DRF", "GLM", "XGBoost", "GBM", "DeepLearning"),
+                                                                                  icon = icon("check-square-o"), 
+                                                                                  status = "primary",
+                                                                                  inline = TRUE,
+                                                                                  outline = TRUE,
+                                                                                  animation = "jelly"
+                                                                                ),
+                                                                                br(),
+                                                                                knobInput(inputId = "run_time_auto_ml",label = HTML("<b>Tiempo máximo corriendo (en segundos)</b>"),value = 15,min = 10,max = 60,
+                                                                                          displayPrevious = TRUE, lineCap = "round",fgColor = "#428BCA",inputColor = "#428BCA"
+                                                                                ),
+                                                                                actionButton("run_auto_ml","Correr auto ML",style = 'color:white; background-color:red; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                            )
+                                                                  )
+                                                      )
+                                                    )
+    )
+    
+  }
+  
+  # Defina sección específica UI si el framework Spark se selecciona UI 
+  else if(framework == "spark"){
+    
+    # Instalar spark si es necesario
+    if (nrow(spark_installed_versions()) == 0){spark_install()}
+    
+    # Connectar a cluster spark
+    sc <- spark_connect(master = "local")
+    config_spark<- spark_session_config(sc)
+    
+    # Defina DashHeader para la ventana de "Configure parametros y corra modelos" (especifico a spark)
+    dashheader_select_parameters <- argonDashHeader(gradient = TRUE,
+                                                    color = "default",
+                                                    separator = FALSE,
+                                                    div(align = "center",
+                                                        argonButton(
+                                                          name = HTML("<font size='+1'>&nbsp; Configure los parametros y corra los modelos</font>"),
+                                                          status = "default",
+                                                          icon = icon("tools"),
+                                                          size = "lg",
+                                                          toggle_modal = TRUE,
+                                                          modal_id = "modal_configure_parameters"
+                                                        ),
+                                                        argonModal(
+                                                          id = "modal_configure_parameters",
+                                                          title = HTML("<b>CONFIGURE LOS PARAMETROS</b>"),
+                                                          status = "default",
+                                                          gradient = TRUE,
+                                                          br(),
+                                                          HTML("<b>Compare diferentes técnicas de machine learning con su propia configuración de hiperparámetros.</b>"),
+                                                          br(),br(),
+                                                          icon("tools"),icon("tools"),icon("tools"),
+                                                          br(),br(),
+                                                          HTML("Usted es libre de seleccionar los parámetros usando el cursor.<br><br> 
+                                                               Cada modelo puede ser ejecutado separadamente al darle click al botón correspondiente, además puedes seleccionar todos los modelos simultáneamente al darle click en 'Correr todos los modelos!'<br><br>
+                                                               ")
+                                                        )
+                                                    ),
+                                                    br(),
+                                                    argonRow(
+                                                      argonColumn(width = 6,div(align = "center",uiOutput("spark_cluster_mem"))),
+                                                      argonColumn(width = 6,div(align = "center",uiOutput("spark_cpu")))
+                                                    ),
+                                                    argonRow(
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "success",
+                                                                title = "Regresión Lineal Generalizada",
+                                                                div(align = "center",
+                                                                    argonRow(
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Familia",inputId = "glm_family",choices = c("gaussian","Gamma","poisson"),selected = "gaussian")
+                                                                      ),
+                                                                      argonColumn(width = 6,
+                                                                                  radioButtons(label = "Link",inputId = "glm_link",choices = c("identity","log"),selected = "identity"),
+                                                                                  switchInput(label = "Intercepto",inputId = "intercept_term_glm",value = TRUE,width = "auto")
+                                                                      )
+                                                                    ),
+                                                                    sliderInput(label = "Lambda",inputId = "reg_param_glm",min = 0,max = 10,value = 0),
+                                                                    sliderInput(label = "Alpha (0:Ridge <-> 1:Lasso)",inputId = "alpha_param_glm",min = 0,max = 1,value = 0.5),
+                                                                    sliderInput(label = "Max. iteraciones",inputId = "max_iter_glm",min = 50,max = 300,value = 100),
+                                                                    actionButton("run_glm","Correr RLG",style = 'color:white; background-color:green; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "danger",
+                                                                title = "Random Forest",
+                                                                div(align = "center",
+                                                                    sliderInput(label = "Número de árboles",min = 1,max = 100, inputId = "num_tree_random_forest",value = 50),
+                                                                    sliderInput(label = "Tasa de submuestreo",min = 0.1,max = 1, inputId = "subsampling_rate_random_forest",value = 1),
+                                                                    sliderInput(label = "Max profundidadad",min = 1,max = 50, inputId = "max_depth_random_forest",value = 20),
+                                                                    sliderInput(label = "Número de bins",min = 2,max = 100, inputId = "n_bins_random_forest",value = 20),
+                                                                    actionButton("run_random_forest","Correr Random Forest",style = 'color:white; background-color:red; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "primary",
+                                                                title = "Árbol de decisión",
+                                                                div(align = "center",
+                                                                    argonRow(
+                                                                      argonColumn(
+                                                                        sliderInput(label = "Max profundidad",inputId = "max_depth_decision_tree",min = 1,max = 30,value = 20),
+                                                                        sliderInput(label = "Max bins",inputId = "max_bins_decision_tree",min = 2,max = 60,value = 32),
+                                                                        sliderInput(label = "Min instancia por nodo",inputId = "min_instance_decision_tree",min = 1,max = 10,value = 1),
+                                                                        actionButton("run_decision_tree","Correr árbol de decisión",style = 'color:white; background-color:darkblue; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                      )
+                                                                    )
+                                                                )
+                                                      ),
+                                                      argonCard(width = 3,
+                                                                icon = icon("sliders"),
+                                                                status = "warning",
+                                                                title = "Potenciación del gradiente",
+                                                                div(align = "center",
+                                                                    sliderInput(label = "Tamaño",min = 0,max = 1, inputId = "step_size_gbm",value = 0.1),
+                                                                    sliderInput(label = "Tasa de submuestreo",min = 0.1,max = 1, inputId = "subsampling_rate_gbm",value = 1),
+                                                                    sliderInput(label = "Max profundidad",min = 1,max = 30, inputId = "max_depth_gbm",value = 20),
+                                                                    actionButton("run_gradient_boosting","Correr potenciación del gradiente",style = 'color:white; background-color:orange; padding:4px; font-size:120%',icon = icon("cogs",lib = "font-awesome"))
+                                                                )
+                                                      )
+                                                    ),
+                                                    argonRow(
+                                                      argonColumn(width = 12,
+                                                                  center = T,
+                                                                  argonCard(width = 12,
+                                                                            icon = icon("cogs"),
+                                                                            status = "warning",
+                                                                            title = "Compare todos los modelos",
+                                                                            div(align = "center",
+                                                                                argonH1("Dar click para correr todos los modelos simultáneamente",display = 4),
+                                                                                argonH1(HTML("<small><i> Los cuatro modelos se ejecutarán de acuerdo con los parámetros que configuró arriba</i></small>"),display = 4), 
+                                                                                br(),
+                                                                                br(),
+                                                                                actionBttn(label = "Corra todos los modelos !",inputId = "train_all",color = "primary", icon = icon("cogs",lib = "font-awesome")),
+                                                                                br()
+                                                                            )
+                                                                  )
+                                                      )
+                                                    )
+    )
+    
+  }
+  
+  # Pegar DashHeaders para construir el UI 
+  argonHeader <- argonColumn(width = "100%",
+                             dashheader_framework,
+                             dashheader_explore_input ,
+                             dashheader_select_parameters,
+                             dashheader_explore_results 
+  )
+  
+  ## ---------------------------------------------------------------------------- SERVER -----------------------------------
+  server = function(session,input, output) {
+    
+    # Construya el vector mostrando qué columnas Date o POSIXct están contenidas en el conjunto de datos de entrada 
+    dates_variable_list <- reactive({
+      dates_columns_list <- c()
+      for (i in colnames(data)){
+        if (is.Date(eval(parse(text = paste0("data$",i)))) | is.POSIXct(eval(parse(text = paste0("data$",i))))){
+          dates_columns_list <- c(dates_columns_list,i)
+        }
+      }
+      dates_columns_list
+    })
+    
+    # Casilla de verificación para considerar el análisis de series de tiempo o no (solo es posible si el conjunto de datos de entrada contiene al menos una columna Date o POSIXct)
+    output$Time_series_checkbox <- renderUI({
+      
+      if (length(dates_variable_list()) >= 1){value = TRUE}
+      else {value = FALSE}
+      
+      awesomeCheckbox("checkbox_time_series", "Serie de Tiempo",status = "primary",value = value)
+      
+    })
+    
+    # Ocultar casilla de verificación si el conjunto de datos de entrada no contiene una o más columnas Date o POSIXct
+    observe({
+      if (length(dates_variable_list()) == 0){
+        shinyjs::hideElement("Time_series_checkbox")
+      }
+    })
+    
+    # Configure los parámetros test_1 y test_2 (solo aplicable para análisis de series de tiempo)
+    observe({
+      
+      req(!is.null(input$checkbox_time_series))
+      if (input$checkbox_time_series == TRUE){
+        req(!is.null(input$time_serie_select_column))
+        test_1$date <-  eval(parse(text = paste0("mean(as.Date(data$",input$time_serie_select_column,"))")))
+        test_2$date <-  eval(parse(text = paste0("max(as.Date(data$",input$time_serie_select_column,"))")))
+      }
+      
+    }) 
+    
+    # Definir cuadro de información que indica qué marco de aprendizaje automático se utiliza
+    output$framework_used <- renderUI({
+      if (framework == "h2o"){selected_framework <- "H2O"}
+      else if (framework == "spark"){selected_framework <- "Spark"}
+      
+      argonInfoCard(
+        value = selected_framework,gradient = TRUE,width = 12,
+        title = "Framework Seleccionada",
+        icon = icon("atom"), 
+        icon_background = "orange",
+        background_color = "lightblue"
+      )
+      
+    })
+    
+    # Definir el cuadro de información sobre la memoria utilizada por el marco
+    output$framework_memory <- renderUI({
+      
+      if (framework == "h2o"){
+        used_memory <- paste(round(as.numeric(cluster_status$free_mem)/1024**3,2), "GB", sep = "")
+        title <- "H2O Cluster Memoria Total"
+      }
+      
+      else if (framework == "spark"){
+        used_memory <- paste(gsub("g","GB",config_spark$spark.driver.memory), sep = "")
+        title <-"Spark Cluster Memoria Total"
+      }
+      
+      argonInfoCard(
+        value = used_memory ,
+        title = title,
+        gradient = TRUE,width = 12,
+        icon = icon("server"), 
+        icon_background = "yellow",
+        background_color = "lightblue"
+      )
+    })
+    
+    # Definir el cuadro de información sobre el número de cpu utilizado por el clúster
+    output$framework_cpu <- renderUI({
+      
+      if (framework == "h2o"){cpu_number <- cluster_status$num_cpus}
+      else if (framework == "spark"){cpu_number <- config_spark$spark.sql.shuffle.partitions}
+      
+      argonInfoCard(
+        value = cpu_number,gradient = TRUE,width = 12,
+        title = "Número de CPUs en uso",
+        icon = icon("microchip"), 
+        icon_background = "green",
+        background_color = "lightblue"
+      )
+    })
+    
+    # Define Info Box input dataset dimensions 
+    output$dataset_infoCard <- renderUI({
+      argonInfoCard(
+        value = paste0(nrow(data)," filas x ",ncol(data)," columnas"),
+        gradient = TRUE,width = 12,
+        title = "Base de datos",
+        icon = icon("image"), 
+        icon_background = "blue",
+        background_color = "lightblue"
+      )
+    })
+    
+    # Definir cuadro indicando el número de filas contenidas en el conjunto de datos de prueba
+    output$message_nrow_train_dataset <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      req(!is.null(table_forecast()[["data_train"]]))
+      
+      if (input$checkbox_time_series == TRUE){
+        number_rows_datatest <- nrow(eval(parse(text = paste0("data[",input$time_serie_select_column," >= input$train_selector[1],][",input$time_serie_select_column," <= input$train_selector[2],]"))))
+      }
+      
+      else if (input$checkbox_time_series == FALSE){
+        number_rows_datatest <- nrow(table_forecast()[["data_train"]])
+      }
+      
+      argonBadge(text = HTML(paste0("<big><big>La BD de entren. contiene <b>",number_rows_datatest,"</b> filas</big></big>")),status = "success")
+      
+    })
+    
+    # Definir cuadro indicando que el gráfico de autocorrelación solo está disponible para series de tiempo
+    output$message_autocorrelation <- renderUI({
+      
+      points_serie <-eval(parse(text = paste0("data[,",colnames(data)[input$variables_class_input_rows_selected],"]"))) 
+      if (input$input_var_graph_type %in% c("Histogram","Autocorrelation") & !is.numeric(points_serie)){
+        argonH1("Sólo disponible para variables numéricas",display = 4)
+      }
+    })
+    
+    # Hacer que los parámetros de glm se correspondan con las opciones de cursores y botones de radio cuando el usuario haga clic en el botón "Ejecutar regresión lineal generalizada" 
+    observeEvent(input$run_glm,{
+      
+      train_1$date <- input$train_selector[1]
+      test_1$date <- input$test_selector[1]
+      test_2$date <- input$test_selector[2]
+      model$train_variables <- input$input_variables
+      v_grad$type_model <- NA
+      v_neural$type_model <- NA
+      v_random$type_model <- NA
+      v_decision_tree$type_model <- NA
+      v_auto_ml$type_model <- NA
+      v_glm$type_model <- "ml_generalized_linear_regression"
+      
+      parameter$family_glm <- input$glm_family
+      parameter$glm_link <- input$glm_link
+      parameter$intercept_term_glm <- input$intercept_term_glm
+      parameter$reg_param_glm <- input$reg_param_glm
+      parameter$alpha_param_glm <- input$alpha_param_glm
+      parameter$max_iter_glm <- input$max_iter_glm
+    })
+    
+    # Haga que los parámetros de Random Forest se correspondan con los cursores cuando el usuario haga clic en el botón "Ejecutar modelo de bosque aleatorio" (y deshabilite otros modelos)
+    observeEvent(input$run_random_forest,{
+      
+      
+      train_1$date <- input$train_selector[1]
+      test_1$date <- input$test_selector[1]
+      test_2$date <- input$test_selector[2]
+      model$train_variables <- input$input_variables
+      v_grad$type_model <- NA
+      v_neural$type_model <- NA
+      v_glm$type_model <- NA
+      v_auto_ml$type_model <- NA
+      v_decision_tree$type_model <- NA
+      
+      
+      v_random$type_model <- "ml_random_forest"
+      
+      
+      parameter$num_tree_random_forest <- input$num_tree_random_forest
+      parameter$subsampling_rate_random_forest <- input$subsampling_rate_random_forest
+      parameter$max_depth_random_forest <-  input$max_depth_random_forest
+      parameter$n_bins_random_forest <- input$n_bins_random_forest
+      
+    })
+    
+    # Haga que los parámetros del modelo de gradiente se correspondan con los cursores cuando el usuario haga clic en el botón "Ejecutar modelo de aumento de gradiente" (y deshabilite otros modelos)
+    observeEvent(input$run_gradient_boosting,{
+      
+      train_1$date <- input$train_selector[1]
+      test_1$date <- input$test_selector[1]
+      test_2$date <- input$test_selector[2]
+      model$train_variables <- input$input_variables
+      v_grad$type_model <- "ml_gradient_boosted_trees"
+      v_neural$type_model <- NA
+      v_glm$type_model <- NA
+      v_random$type_model <- NA
+      v_auto_ml$type_model <- NA
+      v_decision_tree$type_model <- NA
+      
+      
+      parameter$sample_rate_gbm <- input$sample_rate_gbm
+      parameter$n_trees_gbm <- input$n_trees_gbm
+      parameter$max_depth_gbm <- input$max_depth_gbm
+      parameter$learn_rate_gbm <- input$learn_rate_gbm
+      parameter$step_size_gbm <- input$step_size_gbm
+      parameter$subsampling_rate_gbm <- input$subsampling_rate_gbm
+      
+    })
+    
+    # Definir control deslizante (solo aplicable para análisis de series de tiempo)
+    output$slider_time_series_train <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      req(!is.null(input$time_serie_select_column))
+      
+      if (input$checkbox_time_series == TRUE){
+        sliderInput("train_selector", "Elija período de entrenamiento",
+                    min = eval(parse(text = paste0("min(data$",input$time_serie_select_column,")"))),
+                    max = eval(parse(text = paste0("max(data$",input$time_serie_select_column,")"))),
+                    value =  eval(parse(text = paste0("c(min(data$",input$time_serie_select_column,"),mean(data$",input$time_serie_select_column,"))"))))
+      }
+    })
+    
+    # Definir control deslizante de prueba (solo aplicable para análisis de series de tiempo)
+    output$slider_time_series_test <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      req(!is.null(input$time_serie_select_column))
+      
+      if (input$checkbox_time_series == TRUE){
+        sliderInput("test_selector", "Elija período de test:",
+                    min = eval(parse(text = paste0("min(data$",input$time_serie_select_column,")"))),
+                    max = eval(parse(text = paste0("max(data$",input$time_serie_select_column,")"))),
+                    value = eval(parse(text = paste0("c(mean(data$",input$time_serie_select_column,"),max(data$",input$time_serie_select_column,"))"))))
+      }
+      
+    })
+    
+    # Defina el porcentaje del control deslizante para separar el conjunto de datos de entrenamiento del conjunto de datos de prueba 
+    output$slider_percentage <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      
+      if (input$checkbox_time_series == FALSE){
+        
+        selectInput(label = "Partición Entrenamiento/ Test ",inputId = "percentage_selector",choices = paste0(c(50:99),"%"),selected = 70,multiple = FALSE)
+        
+      }
+    })
+    
+    # Defina selectInput para elegir qué columna Date o POSIXct usar entre los nombres de las columnas del conjunto de datos de entrada (solo aplicable para el análisis de series de tiempo)
+    output$time_series_column <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      if (input$checkbox_time_series == TRUE){
+        selectInput(inputId = "time_serie_select_column",label = "Columna de fecha",choices = dates_variable_list(),multiple = FALSE)
+      }
+    })
+    
+    # Definir lista de variables explicativas
+    output$Variables_input_selection<- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      variable_input_list <- x[!(x %in% dates_variable_list())]
+      selectInput( inputId  = "input_variables",label = "Variables explicativas: ",choices = x,multiple = TRUE,selected = variable_input_list)
+    })
+    
+    # Definir el eje X para el gráfico de datos de entrada 
+    output$X_axis_explore_dataset <- renderUI({
+      
+      req(!is.null(input$checkbox_time_series))
+      if (input$checkbox_time_series == TRUE){
+        req(!is.null(input$time_serie_select_column))
+        selected_column <- input$time_serie_select_column        
+      }
+      
+      else {selected_column <- colnames(data)[1]}
+      
+      selectInput(inputId = "x_variable_input_curve",label = "Variable en el eje X",choices = colnames(data),selected = selected_column)
+    })
+    
+    # Definir resumen de datos con la clase de cada variable 
+    output$variables_class_input <- renderDT({
+      table_classes <- data.table()
+      
+      for (i in 1:ncol(data)){
+        
+        table_classes <- rbind(table_classes,
+                               data.frame(Variable = colnames(data)[i],
+                                          Class = class(eval(parse(text = paste0("data$",colnames(data)[i]))))
+                               )
+        )
+      }
+      
+      datatable(table_classes,options = list(pageLength =10,searching = FALSE,lengthChange = FALSE),selection = list(mode = "single",selected = c(1))
+      )
+    })
+    
+    # Definir el diagrama de caja correspondiente a la variable seleccionada en variables_class_input
+    output$variable_boxplot <- renderPlotly({
+      
+      par("mar")
+      par(mar=c(1,1,1,1))
+      
+      column_name <- colnames(data)[input$variables_class_input_rows_selected]
+      points_serie <-eval(parse(text = paste0("data[,",column_name,"]"))) 
+      
+      if (input$input_var_graph_type == "Histogram"){
+        req(is.numeric(points_serie))
+        ggplotly(
+          ggplot(data = data,aes(x = eval(parse(text = column_name)),fill = column_name))+
+            xlab(column_name)+
+            geom_histogram(aes(y=..density..), colour="black", fill="#FCADB3",bins = 30)+
+            geom_density(alpha = 0.4,size = 1.3) +
+            scale_fill_manual(values="#56B4E9")+
+            theme_bw(),tooltip = "density"
+        ) %>% hide_legend()
+      }
+      else if (input$input_var_graph_type == "Boxplot"){
+        plot_ly(x = points_serie,type = "box",name = column_name)
+      }
+      else if (input$input_var_graph_type == "Autocorrelation"){
+        req(is.numeric(points_serie))
+        acf_object <- acf(points_serie,lag.max = 100)
+        data_acf <- cbind(acf_object$lag,acf_object$acf) %>% as.data.table() %>% setnames(c("Lag","ACF"))
+        plot_ly(x = data_acf$Lag, y = data_acf$ACF, type = "bar")
+        
+      }
+      
+    })
+    
+    # Definir gráfico para explorar dependencias entre variables 
+    output$explore_dataset_chart <- renderPlotly({
+      
+      req(!is.null(input$checkbox_time_series))
+      req(!is.null(input$x_variable_input_curve))
+      req(!is.null(input$y_variable_input_curve))
+      
+      if (input$checkbox_time_series == TRUE){
+        data_train_chart <- eval(parse(text = paste0("data[",input$time_serie_select_column," >= input$train_selector[1],][",input$time_serie_select_column," <= input$train_selector[2],]")))
+        data_test_chart <- eval(parse(text = paste0("data[",input$time_serie_select_column," > input$test_selector[1],][",input$time_serie_select_column," <= input$test_selector[2],]")))
+        
+      }
+      
+      else if (input$checkbox_time_series == FALSE){
+        
+        req(!is.null(table_forecast()[["data_train"]]))
+        data_train_chart <- table_forecast()[["data_train"]]
+        data_test_chart <- table_forecast()[["data_test"]]
+        
+      }
+      
+      plot_ly(data = data_train_chart, x = eval(parse(text = paste0("data_train_chart$",input$x_variable_input_curve))), 
+              y = eval(parse(text = paste0("data_train_chart$",input$y_variable_input_curve))),
+              type = "scatter",mode = "markers",
+              name = "Datos de entrenamiento") %>% 
+        add_trace(x = eval(parse(text = paste0("data_test_chart$",input$x_variable_input_curve))), 
+                  y = eval(parse(text = paste0("data_test_chart$",input$y_variable_input_curve))),
+                  type = "scatter",mode = "markers",
+                  name = "Datos de prueba") %>% 
+        layout(xaxis = list(title = input$x_variable_input_curve),  yaxis = list(title = input$y_variable_input_curve),legend = list(orientation = "h",xanchor = "center",x = 0.5,y= 1.2))
+      
+    })
+    
+    # Define correlation matrix object
+    output$correlation_matrix <- renderPlotly({
+      
+      data_correlation <- as.matrix(select_if(data, is.numeric))
+      plot_ly(x = colnames(data_correlation) , y = colnames(data_correlation), z =cor(data_correlation)  ,type = "heatmap", source = "heatplot")
+    })
+    
+    # Definir el gráfico de salida comparando los valores predichos frente a los reales en el período de prueba para los modelos seleccionados
+    output$output_curve <- renderDygraph({
+      
+      
+      req(!is.null(input$checkbox_time_series))
+      
+      if (input$checkbox_time_series == TRUE){
+        req(!is.null(input$time_serie_select_column))
+        data_output_curve <- eval(parse(text = paste0("table_forecast()[['results']][,.(",input$time_serie_select_column,",",y,")]")))
+        
+      }
+      
+      else if (input$checkbox_time_series == FALSE){
+        data_output_curve <- table_forecast()[['results']] %>% 
+          select(-c(setdiff(colnames(data),y))) %>% 
+          mutate(Counter = row_number()) %>% 
+          select(Counter,everything())
+        
+      }
+      
+      output_dygraph <- dygraph(data = data_output_curve ,main = "Predicción de resultados bajo el período de prueba",width = "100%",height = "150%") %>%
+        dyAxis("x",valueRange = c(0,nrow(data))) %>% 
+        dyAxis("y",valueRange = c(0,1.5 * max(eval(parse(text =paste0("table_forecast()[['results']]$",y)))))) %>%
+        dyOptions(animatedZooms = TRUE,fillGraph = T,drawPoints = TRUE, pointSize = 2)
+      
+      
+      
+      # el gráfico se puede mostrar con el modo de barra o de línea
+      if (input$bar_chart_mode == TRUE){
+        output_dygraph <- output_dygraph %>% dyBarChart()
+      }
+      
+      output_dygraph %>% dyLegend(width = 800)
+      
+    })
+    
+    # Definir la tabla de rendimiento visible en la pestaña "Comparar rendimientos de modelos"
+    output$score_table <- renderDT({
+      
+      
+      req(ncol(table_forecast()[['results']]) > ncol(data))
+      req(!is.null(input$checkbox_time_series))
+      
+      if (input$checkbox_time_series == TRUE){
+        
+        req(!is.null(input$time_serie_select_column))
+        
+        performance_table <-  eval(parse(text = paste0("table_forecast()[['results']] %>% 
+                                                         gather(key = Model,value = Predicted_value,-",input$time_serie_select_column,",-y) %>% 
+                                                         as.data.table()")))
+      }
+      
+      else if (input$checkbox_time_series == FALSE){
+        
+        performance_table <-  table_forecast()[['results']] %>%
+          select(-c(setdiff(colnames(data),y))) %>% 
+          gather(key = Model,value = Predicted_value,-y) %>%
+          as.data.table()
+      }
+      
+      performance_table <- performance_table %>% 
+        group_by(Model) %>%
+        summarise(`MAPE(%)` = round(100 * mean(abs((Predicted_value - eval(parse(text = y)))/eval(parse(text = y))),na.rm = TRUE),1),
+                  RMSE = round(sqrt(mean((Predicted_value - eval(parse(text = y)))**2)),2))
+      
+      
+      if (nrow(table_forecast()[['traning_time']]) != 0){
+        performance_table <- performance_table %>% merge(.,table_forecast()[['traning_time']],by = "Model")
+      }
+      
+      datatable(
+        performance_table %>% arrange(`MAPE(%)`) %>% as.data.table()
+        , extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('csv', 'excel', 'pdf', 'print'))
+      )
+    })
+    
+    # 
+    output$feature_importance <- renderPlotly({
+      
+      if (nrow(table_forecast()[['table_importance']]) != 0){
+        
+        if (framework == 'h2o'){
+          
+          ggplotly(
+            
+            ggplot(data = table_forecast()[['table_importance']])+
+              geom_bar(aes(x = reorder(`variable`,scaled_importance),y = scaled_importance,fill =  `model`),stat = "identity",width = 0.3)+
+              facet_wrap( model ~ .)+
+              coord_flip()+
+              xlab("")+
+              ylab("")+
+              theme(legend.position="none")
+          )
+          
+        }
+        
+        else if (framework == 'spark'){
+          ggplotly(
+            
+            ggplot(data = table_forecast()[['table_importance']])+
+              geom_bar(aes(x = reorder(`feature`,importance),y = importance,fill =  `model`),stat = "identity",width = 0.3)+
+              facet_wrap( model ~ .)+
+              coord_flip()+
+              xlab("")+
+              ylab("")+
+              theme(legend.position="none")
+          )
+        }
+      }
+      
+    })
+    
+    # Definir tabla de características de importancia tabla visible en la pestaña "Importancia de características"
+    output$table_of_results <- renderDT({
+      
+      datatable(
+        table_forecast()[['results']],
+        extensions = 'Buttons', options = list(dom = 'Bfrtip',buttons = c('csv', 'excel', 'pdf', 'print'))
+      )
+      
+      
+    },server = FALSE)
+    
+    # Sincronizar cursores de entrenamiento y prueba
+    observeEvent(input$train_selector,{
+      updateSliderInput(session,'test_selector',
+                        value= c(input$train_selector[2],input$test_selector[2]) )
+    })
+    observeEvent(input$test_selector,{
+      updateSliderInput(session,'train_selector',
+                        value= c(input$train_selector[1],input$test_selector[1]) )
+    })
+    
+    #Mensaje que indica que la importancia de la función no está disponible para el modelo glm
+    output$feature_importance_glm_message <- renderUI({
+      if (!is.na(v_glm$type_model) & is.na(v_random$type_model) & is.na(v_neural$type_model) &  is.na(v_decision_tree$type_model) & is.na(v_grad$type_model) & is.na(v_auto_ml$type_model)){
+        sendSweetAlert(
+          session = session,
+          title = "Lo sentimos ...",
+          text = "La importancia de la feature no está disponible para el método de regresión generalizada!",
+          type = "error"
+          
+          
+        )
+        
+        argonH1("La importancia de la feature no está disponible para el método de regresión generalizada",display = 4)
+      }
+    })
+    
+    # Mensaje que indica que los resultados no están disponibles si no se ha ejecutado ningún modelo
+    output$message_compare_models_performances <- renderUI({
+      
+      if (ncol(table_forecast()[['results']]) <= ncol(data)){  
+        sendSweetAlert(
+          session = session,
+          title = "",
+          text = "Ejecute al menos un algoritmo para comprobar el rendimiento del modelo !",
+          type = "error"
+          
+          
+        )
+        
+        argonH1("Ejecute al menos un algoritmo para comprobar el rendimiento del modelo. !",display = 4)
+      }
+    })
+    
+    # Mensaje que indica que los resultados no están disponibles si no se ha ejecutado ningún modelo
+    output$message_feature_importance <- renderUI({
+      
+      if (ncol(table_forecast()[['results']]) <= ncol(data)){  
+        
+        sendSweetAlert(
+          session = session,
+          title = "",
+          text = "Ejecute al menos un algoritmo para comprobar la importancia de las features !",
+          type = "error"
+          
+          
+        )
+        
+        argonH1("Ejecute al menos un algoritmo para comprobar la importancia de las features !",display = 4)
+      }
+    })
+    
+    # Cuando se de click en "¡Ejecutar todos los modelos!", enviar messageBox una vez que todos los modelos hayan sido entrenados
+    observe({
+      
+      if (ncol(table_forecast()[['results']]) == ncol(data) + 4){
+        
+        sendSweetAlert(
+          session = session,
+          title = "Se entrenaron sus cuatro modelos de Machine Learning !",
+          text = "Click para ver los resultados",
+          type = "success"
+        )
+      }
+    })
+    
+    # Definir objetos específicos del lado del servidor si se selecciona el marco H2O
+    if(framework == "h2o"){
+      
+      # Haga que todos los parámetros correspondan a las opciones de cursores y botones de radio cuando el usuario haga clic en "Ejecutar modelos sintonizados".
+      observeEvent(input$train_all,{
+        
+        train_1$date <- input$train_selector[1]
+        test_1$date <- input$test_selector[1]
+        test_2$date <- input$test_selector[2]
+        
+        model$train_variables <- input$input_variables
+        
+        v_neural$type_model <- "ml_neural_network"
+        v_grad$type_model <- "ml_gradient_boosted_trees"
+        v_glm$type_model <- "ml_generalized_linear_regression"
+        v_random$type_model <- "ml_random_forest"
+        v_auto_ml$type_model <- NA
+        
+        parameter$family_glm <- input$glm_family
+        parameter$glm_link <- input$glm_link
+        parameter$intercept_term_glm <- input$intercept_term_glm
+        parameter$reg_param_glm <- input$reg_param_glm
+        parameter$alpha_param_glm <- input$alpha_param_glm
+        parameter$max_iter_glm <- input$max_iter_glm
+        
+        
+        parameter$num_tree_random_forest <- input$num_tree_random_forest
+        parameter$subsampling_rate_random_forest <- input$subsampling_rate_random_forest
+        parameter$max_depth_random_forest <-  input$max_depth_random_forest
+        parameter$n_bins_random_forest <- input$n_bins_random_forest
+        
+        parameter$sample_rate_gbm <- input$sample_rate_gbm
+        parameter$n_trees_gbm <- input$n_trees_gbm
+        parameter$max_depth_gbm <- input$max_depth_gbm
+        parameter$learn_rate_gbm <- input$learn_rate_gbm
+        
+        parameter$hidden_neural_net <- input$hidden_neural_net
+        parameter$epochs_neural_net <- input$epochs_neural_net
+        parameter$activation_neural_net <- input$activation_neural_net
+        parameter$loss_neural_net <- input$loss_neural_net
+        parameter$rate_neural_net <- input$rate_neural_net
+        
+      })
+      
+      # Haga que los parámetros de la red neuronal se correspondan con las opciones de cursores y botones de radio cuando el usuario haga clic en el botón "Ejecutar regresión de red neuronal" (y deshabilite otros modelos)
+      observeEvent(input$run_neural_network,{
+        
+        train_1$date <- input$train_selector[1]
+        test_1$date <- input$test_selector[1]
+        test_2$date <- input$test_selector[2]
+        model$train_variables <- input$input_variables
+        
+        v_neural$type_model <- "ml_neural_network"
+        v_grad$type_model <- NA
+        v_glm$type_model <- NA
+        v_random$type_model <- NA
+        v_auto_ml$type_model <- NA
+        
+        parameter$hidden_neural_net <- input$hidden_neural_net
+        parameter$epochs_neural_net <- input$epochs_neural_net
+        parameter$activation_neural_net <- input$activation_neural_net
+        parameter$loss_neural_net <- input$loss_neural_net
+        parameter$rate_neural_net <- input$rate_neural_net
+        
+      })
+      
+      #Hacer que el parámetro del autoML corresponda al knobInput cuando le de click en "Correr auto ML" 
+      observeEvent(input$run_auto_ml,{
+        
+        train_1$date <- input$train_selector[1]
+        test_1$date <- input$test_selector[1]
+        test_2$date <- input$test_selector[2]
+        model$train_variables <- input$input_variables
+        
+        v_grad$type_model <- NA
+        v_neural$type_model <- NA
+        v_glm$type_model <- NA
+        v_random$type_model <- NA
+        v_auto_ml$type_model <- "ml_auto"
+        
+        parameter$run_time_auto_ml <-  input$run_time_auto_ml
+        parameter$auto_ml_autorized_models <- input$auto_ml_autorized_models
+        
+      })
+      
+      # Definir una lista de objetos relacionados con los resultados del modelo (específico para el marco H2O)
+      table_forecast <- reactive({
+        
+        # Asegúrese de que un valor esté establecido en checkbox_time_series casilla de verificación
+        req(!is.null(input$checkbox_time_series))
+        
+        if (input$checkbox_time_series == TRUE){
+          req(!is.null(test_1$date))
+          data_train <- data.table()
+          data_test <- data.table()
+          data_results <- eval(parse(text = paste0("data[",input$time_serie_select_column,">'",test_1$date,"',][",input$time_serie_select_column,"< '",test_2$date,"',]")))
+          
+          
+        }
+        
+        else if (input$checkbox_time_series == FALSE){
+          
+          
+          req(!is.null(input$percentage_selector))
+          
+          data_train <- data %>% sample_frac(as.numeric(as.character(gsub("%","",input$percentage_selector)))*0.01)
+          data_test <- data %>% anti_join(data_train,by = colnames(data))
+          data_results <- data_test
+          
+          
+        }
+        
+        
+        table_results <- data_results
+        dl_auto_ml <- NA
+        var_input_list <- c()
+        for (i in 1:length(model$train_variables)){
+          var_input_list <- c(var_input_list,model$train_variables[i])
+          
+        }
+        
+        
+        # Verifique que al menos una variable explicativa esté seleccionada
+        if (length(var_input_list) != 0){
+          
+          if (input$checkbox_time_series == TRUE){
+            data_h2o_train <- as.h2o(eval(parse(text = paste0("data[",input$time_serie_select_column,"<='",test_1$date,"',][",input$time_serie_select_column,">='",train_1$date,"',]"))))
+            data_h2o_test <- as.h2o(eval(parse(text = paste0("data[",input$time_serie_select_column,">'",test_1$date,"',][",input$time_serie_select_column,"< '",test_2$date,"',]"))))
+            
+          }
+          
+          else if (input$checkbox_time_series == FALSE){
+            data_h2o_train <- as.h2o(data_train)
+            data_h2o_test <- as.h2o(data_test)
+          }
+          
+          
+          # Cálculo de predicciones glm y tiempo de cálculo asociado
+          if (!is.na(v_glm$type_model) & v_glm$type_model == "ml_generalized_linear_regression"){
+            
+            t1 <- Sys.time()
+            fit <- h2o.glm(x = as.character(var_input_list),
+                           y = y,
+                           training_frame = data_h2o_train,
+                           family = parameter$family_glm,
+                           link = parameter$glm_link,
+                           intercept = parameter$intercept_term_glm,
+                           lambda = parameter$reg_param_glm,
+                           alpha = parameter$alpha_param_glm,
+                           max_iterations = parameter$max_iter_glm,
+                           seed = 1
+            )
+            t2 <- Sys.time()
+            time_glm <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Generalized linear regression")
+            table_glm <- h2o.predict(fit,data_h2o_test) %>% as.data.table() %>% mutate(predict = round(predict,3)) %>% rename(`Generalized linear regression` = predict)
+            table_results <- cbind(data_results,table_glm)%>% as.data.table()
+            
+          }
+          
+          # CCálculo de predicciones de Random Forest y tiempo de cálculo asociado
+          if (!is.na(v_random$type_model) & v_random$type_model == "ml_random_forest"){
+            
+            
+            
+            t1 <- Sys.time()
+            fit <- h2o.randomForest(x = as.character(var_input_list),
+                                    y = y,
+                                    training_frame = data_h2o_train,
+                                    ntrees = parameter$num_tree_random_forest,
+                                    sample_rate = parameter$subsampling_rate_random_forest,
+                                    max_depth = parameter$max_depth_random_forest,
+                                    nbins = parameter$n_bins_random_forest,
+                                    seed = 1
+            )
+            t2 <- Sys.time()
+            time_random_forest <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Random forest")
+            importance_random_forest <- h2o.varimp(fit) %>% as.data.table() %>% select(`variable`,scaled_importance) %>% mutate(model = "Random forest")
+            table_random_forest<- h2o.predict(fit,data_h2o_test) %>% as.data.table() %>% mutate(predict = round(predict,3))  %>% rename(`Random forest` = predict)
+            table_results <- cbind(data_results,table_random_forest)%>% as.data.table()
+            
+          }
+          
+          # Cálculo de predicciones de redes neuronales y tiempo de cálculo asociado
+          if (!is.na(v_neural$type_model) & v_neural$type_model == "ml_neural_network"){
+            
+            t1 <- Sys.time()
+            fit <- h2o.deeplearning(x = as.character(var_input_list),
+                                    y = y,
+                                    training_frame = data_h2o_train,
+                                    activation = parameter$activation_neural_net,
+                                    loss = parameter$loss_neural_net,
+                                    hidden = eval(parse(text = parameter$hidden_neural_net)) ,
+                                    epochs = parameter$epochs_neural_net,
+                                    rate = parameter$rate_neural_net,
+                                    reproducible = T,
+                                    seed = 1
+            )
+            t2 <- Sys.time()
+            
+            time_neural_network <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Neural network")
+            importance_neural_network <- h2o.varimp(fit) %>% as.data.table() %>% select(`variable`,scaled_importance) %>% mutate(model = "Neural network")
+            table_neural_network <- h2o.predict(fit,data_h2o_test) %>% as.data.table() %>% mutate(predict = round(predict,3)) %>% rename(`Neural network` = predict)
+            table_results <- cbind(data_results,table_neural_network)%>% as.data.table()
+            
+          }
+          
+          # Cálculo de predicciones de redes neuronales y tiempo de cálculo asociado
+          if (!is.na(v_grad$type_model) & v_grad$type_model == "ml_gradient_boosted_trees"){
+            
+            t1 <- Sys.time()
+            fit <- h2o.gbm(x = as.character(var_input_list),
+                           y = y,
+                           training_frame = data_h2o_train,
+                           sample_rate = parameter$sample_rate_gbm,
+                           ntrees = parameter$n_trees_gbm,
+                           max_depth = parameter$max_depth_gbm,
+                           learn_rate = parameter$learn_rate_gbm,
+                           min_rows = 2,
+                           seed = 1
+            )
+            t2 <- Sys.time()
+            time_gbm <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Gradient boosted trees")
+            importance_gbm <- h2o.varimp(fit) %>% as.data.table() %>% select(`variable`,scaled_importance) %>% mutate(model = "Gradient boosted trees")
+            table_gradient_boosting <- h2o.predict(fit,data_h2o_test) %>% as.data.table() %>% mutate(predict = round(predict,3)) %>% rename(`Gradient boosted trees` = predict)
+            table_results <- cbind(data_results,table_gradient_boosting)%>% as.data.table()
+            
+          }
+          
+          
+          
+          # Cálculo de predicciones de autoML (el tiempo máximo de cálculo se ha establecido en 60 segundos)
+          if (!is.na(v_auto_ml$type_model) & v_auto_ml$type_model == "ml_auto"){
+            
+            req(!is.null(parameter$auto_ml_autorized_models))
+            
+            dl_auto_ml <- h2o.automl(x = as.character(var_input_list),
+                                     include_algos = parameter$auto_ml_autorized_models,
+                                     y = y,
+                                     training_frame = data_h2o_train,
+                                     max_runtime_secs = parameter$run_time_auto_ml,
+                                     seed = 1
+                                     
+            )
+            
+            
+            
+            time_auto_ml <- data.frame(`Training time` =  paste0(parameter$run_time_auto_ml," seconds"), Model = "Auto ML")
+            table_auto_ml<- h2o.predict(dl_auto_ml,data_h2o_test) %>% as.data.table() %>% mutate(predict = round(predict,3))  %>% rename(`Auto ML` = predict)
+            table_results <- cbind(data_results,table_auto_ml)%>% as.data.table()
+            
+          }
+          
+          # Resultados de ensamblaje de todos los modelos (algunas columnas pueden permanecer vacías)
+          if (!is.na(v_neural$type_model) & !is.na(v_grad$type_model) & !is.na(v_glm$type_model) & !is.na(v_random$type_model)){
+            
+            table_results <- cbind(data_results,table_glm,table_random_forest,table_neural_network,table_gradient_boosting)%>% as.data.table()
+          }
+          
+        }
+        
+        table_training_time <- rbind(time_gbm,time_random_forest,time_glm,time_neural_network,time_auto_ml)
+        table_importance <- rbind(importance_gbm,importance_random_forest,importance_neural_network) %>% as.data.table()
+        
+        # Use una lista para acceder a diferentes tablas desde un solo objeto reactivo
+        list(data_train = data_train, data_test = data_test, traning_time = table_training_time, table_importance = table_importance, results = table_results,auto_ml_model = dl_auto_ml)
+        
+        
+      })
+      
+      # Enviar WarningBox si se hace clic en el botón Ejecutar ML automático "y no se autoriza la búsqueda de modelos
+      observeEvent(input$run_auto_ml,{
+        if (is.null(parameter$auto_ml_autorized_models)){
+          sendSweetAlert(session = session, title = "Advertencia !",
+                         text = "Autorice al menos a una familia de modelos para realizar Auto Machine Learning",
+                         type = "warning"
+          )
+        }
+      })
+      
+      # Cuando se hace clic en el botón "Ejecutar ML automático", enviar messageBox una vez que se alcanza el tiempo de búsqueda
+      observe({
+        
+        if("Auto ML" %in% colnames(table_forecast()[['results']])){
+          list <- c(HTML(paste0("<b>Selected model:</b> ",table_forecast()[['auto_ml_model']]@leader@algorithm)))
+          for (i in 1:ncol(table_forecast()[['auto_ml_model']]@leader@model$model_summary)){
+            list <- rbind(list,HTML(paste0("<b>",colnames(table_forecast()[['auto_ml_model']]@leader@model$model_summary[i]),":</b> ",
+                                           table_forecast()[['auto_ml_model']]@leader@model$model_summary[i])))
+          }
+          
+          # El cuadro de mensaje indica la mejor familia de modelos y todos los valores de hiperparámetros asociados
+          
+          sendSweetAlert(
+            session = session,
+            title = "El algoritmo Auto ML algorithm tuvo éxito!",
+            text = HTML(paste0(
+              "<br>",
+              list)),
+            type = "success",
+            html = TRUE
+          )
+        }
+      })
+    }
+    
+    # Definir objetos específicos del lado del servidor si se selecciona el marco de Spark
+    else if(framework == "spark"){
+      
+      # Haga que todos los parámetros correspondan a las opciones de cursores y botones de radio cuando el usuario haga clic en "Ejecutar todos los modelos". botón
+      observeEvent(input$train_all,{
+        
+        test_1$date <- input$test_selector[1]
+        test_2$date <- input$test_selector[2]
+        model$train_variables <- input$input_variables
+        v_decision_tree$type_model <- "ml_decision_tree"
+        v_glm$type_model <- "ml_generalized_linear_regression"
+        v_grad$type_model <- "ml_gradient_boosted_trees"
+        v_random$type_model <- "ml_random_forest"
+        
+        parameter$step_size_gbm <- input$step_size_gbm
+        parameter$subsampling_rate_gbm <- input$subsampling_rate_gbm
+        parameter$max_depth_gbm <- input$max_depth_gbm
+        
+        parameter$num_tree_random_forest <- input$num_tree_random_forest
+        parameter$subsampling_rate_random_forest <- input$subsampling_rate_random_forest
+        parameter$max_depth_random_forest <-  input$max_depth_random_forest
+        
+        
+        parameter$family_glm <- input$glm_family
+        parameter$link_glm <- input$glm_link
+        parameter$intercept_term_glm <- input$intercept_term_glm
+        parameter$reg_param_glm <- input$reg_param_glm
+        parameter$max_iter_glm <- input$max_iter_glm
+        
+        parameter$max_depth_decision_tree <- input$max_depth_decision_tree
+        parameter$max_bins_decision_tree <- input$max_bins_decision_tree
+        parameter$min_instance_decision_tree <- input$min_instance_decision_tree
+        
+      })
+      
+      # Hacer que los parámetros del árbol de decisión se correspondan con los cursores cuando el usuario hace clic en el botón "Ejecutar árbol de decisión" (y deshabilita otros modelos)
+      observeEvent(input$run_decision_tree,{
+        
+        test_1$date <- input$test_selector[1]
+        test_2$date <- input$test_selector[2]
+        model$train_variables <- input$input_variables
+        parameter$max_depth_decision_tree <- input$max_depth_decision_tree
+        parameter$max_bins_decision_tree <- input$max_bins_decision_tree
+        parameter$min_instance_decision_tree <- input$min_instance_decision_tree
+        
+        v_decision_tree$type_model <- "ml_decision_tree"
+        
+        v_glm$type_model <- NA
+        v_grad$type_model <- NA
+        v_random$type_model <- NA
+        
+      })
+      
+      # Definir una lista de objetos relacionados con los resultados del modelo (específico para el marco de Spark)
+      table_forecast <- reactive({
+        
+        # Asegúrese de que un valor esté establecido en la casilla de verificación checkbox_time_series
+        
+        req(!is.null(input$checkbox_time_series))
+        
+        if (input$checkbox_time_series == TRUE){
+          req(!is.null(test_1$date))
+          req(!is.null(test_2$date))
+          data_train <- data.table()
+          data_test <- data.table()
+          data_results <- eval(parse(text = paste0("data[",input$time_serie_select_column,">'",test_1$date,"',][",input$time_serie_select_column,"< '",test_2$date,"',]")))
+          
+        }
+        
+        else if (input$checkbox_time_series == FALSE){
+          
+          req(!is.null(input$percentage_selector))
+          
+          data_train <- data %>% sample_frac(as.numeric(as.character(gsub("%","",input$percentage_selector)))*0.01)
+          data_test <- data %>% anti_join(data_train, by = colnames(data))
+          data_results <- data_test
+          
+        }
+        
+        table_results <- data_results
+        
+        var_input_list <- ""
+        
+        
+        for (i in 1:length(model$train_variables)){var_input_list <- paste0(var_input_list,"+",model$train_variables[i])}
+        var_input_list <- ifelse(startsWith(var_input_list,"+"),substr(var_input_list,2,nchar(var_input_list)),var_input_list)
+        
+        # Verifique que al menos una variable explicativa esté seleccionada 
+        if (var_input_list != "+"){  
+          
+          if (input$checkbox_time_series == TRUE){
+            
+            data_spark_train <- eval(parse(text = paste0("data[",input$time_serie_select_column,"<='",test_1$date,"',]")))
+            data_spark_test <- eval(parse(text = paste0("data[",input$time_serie_select_column,">'",test_1$date,"',][",input$time_serie_select_column,"< '",test_2$date,"',]")))
+            
+          }
+          
+          else if (input$checkbox_time_series == FALSE){
+            
+            data_spark_train <- data_train
+            data_spark_test <- data_test
+          }
+          
+          data_spark_train <- copy_to(sc, data_spark_train, "data_spark_train", overwrite = TRUE)
+          data_spark_test <- copy_to(sc, data_spark_test, "data_spark_test", overwrite = TRUE)
+          
+          
+          
+          # cálculo de predicciones glm y tiempo de cálculo asociado ml
+          if (!is.na(v_glm$type_model) & v_glm$type_model == "ml_generalized_linear_regression"){
+            
+            t1 <- Sys.time()
+            eval(parse(text = paste0("fit <- data_spark_train %>% ml_generalized_linear_regression(", y ," ~ " ,var_input_list ,
+                                     ",family  = ", parameter$family_glm,
+                                     ",link =",parameter$link_glm,
+                                     ",fit_intercept =",parameter$intercept_term_glm,
+                                     ",reg_param =",parameter$reg_param_glm,
+                                     ",max_iter =",parameter$max_iter_glm,
+                                     ")")))
+            t2 <- Sys.time()
+            time_glm <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Generalized linear regression")
+            
+            table_ml_glm <- ml_predict(fit,data_spark_test) %>% select(prediction)%>% mutate(prediction = round(prediction,3)) %>% 
+              rename(`Generalized linear regression` = prediction) %>% as.data.table()
+            table_results <- cbind(data_results,table_ml_glm) %>% as.data.table()
+            
+            
+          }
+          
+          # Ccálculo de predicciones del gradiente y tiempo de cálculo asociado ml 
+          if (!is.na(v_grad$type_model) & v_grad$type_model == "ml_gradient_boosted_trees"){
+            
+            
+            t1 <- Sys.time()
+            
+            eval(parse(text = paste0("fit <- data_spark_train %>% ml_gradient_boosted_trees(", y ," ~ " ,var_input_list ,
+                                     ",step_size =",parameter$step_size_gbm,
+                                     ",subsampling_rate =",parameter$subsampling_rate_gbm,
+                                     ",max_depth =",parameter$max_depth_gbm,
+                                     " )")))
+            t2 <- Sys.time()
+            
+            time_gbm <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Gradient boosted trees") 
+            importance_gbm <- ml_feature_importances(fit) %>% mutate(model = "Gradient boosted trees")
+            
+            table_ml_gradient_boosted <- ml_predict(fit,data_spark_test) %>% select(prediction) %>% mutate(prediction = round(prediction,3)) %>% 
+              rename(`Gradient boosted trees` = prediction) %>% as.data.table()
+            table_results <- cbind(data_results,table_ml_gradient_boosted) %>% as.data.table()
+            
+          }
+          
+          # cálculo de predicciones Random Forest y tiempo de cálculo asociado ml 
+          if (!is.na(v_random$type_model) & v_random$type_model == "ml_random_forest"){
+            
+            t1 <- Sys.time()
+            eval(parse(text = paste0("fit <- data_spark_train %>% ml_random_forest(", y ," ~ " ,var_input_list ,
+                                     ",num_trees  =",parameter$num_tree_random_forest,
+                                     ",subsampling_rate =",parameter$subsampling_rate_random_forest,
+                                     ",max_depth  =",parameter$max_depth_random_forest,
+                                     ")")))
+            t2 <- Sys.time()
+            time_random_forest <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Random forest")
+            importance_random_forest <- ml_feature_importances(fit) %>% mutate(model = "Random forest")
+            
+            table_ml_random_forest <- ml_predict(fit,data_spark_test) %>% select(prediction)%>% mutate(prediction = round(prediction,3)) %>% 
+              rename(`Random forest` = prediction) %>% as.data.table()
+            table_results <- cbind(data_results,table_ml_random_forest) %>% as.data.table()
+            
+          }
+          
+          
+          # Cálculo de predicciones de árboles de decisión y tiempo de cálculo asociado
+          if (!is.na(v_decision_tree$type_model) & v_decision_tree$type_model == "ml_decision_tree"){
+            
+            t1 <- Sys.time()
+            eval(parse(text = paste0("fit <- data_spark_train %>% ml_decision_tree(", y ," ~ " ,var_input_list ,
+                                     ",max_depth  =",parameter$max_depth_decision_tree,
+                                     ",max_bins  =",parameter$max_bins_decision_tree,
+                                     ",min_instances_per_node  =",parameter$min_instance_decision_tree,
+                                     ")")))
+            t2 <- Sys.time()
+            time_decision_tree <- data.frame(`Training time` =  paste0(round(t2 - t1,1)," seconds"), Model = "Decision tree")
+            importance_decision_tree <- ml_feature_importances(fit) %>% mutate(model = "Decision tree")
+            
+            table_ml_decision_tree <- ml_predict(fit,data_spark_test) %>% select(prediction)%>% mutate(prediction = round(prediction,3)) %>% 
+              rename(`Decision tree` = prediction) %>% as.data.table()
+            table_results <- cbind(data_results,table_ml_decision_tree) %>% as.data.table()
+            
+          }
+          
+          # Resultados de ensamblaje de todos los modelos (algunas columnas pueden permanecer vacías)
+          if (!is.na(v_decision_tree$type_model) & !is.na(v_grad$type_model) & !is.na(v_glm$type_model) & !is.na(v_random$type_model))
+            
+            table_results <- cbind(data_results,table_ml_gradient_boosted,table_ml_random_forest,table_ml_glm,table_ml_decision_tree) %>% 
+            as.data.table()
+          
+        }
+        
+        table_training_time <- rbind(time_gbm,time_random_forest,time_glm,time_decision_tree)
+        table_importance <- rbind(importance_gbm,importance_random_forest,importance_decision_tree) %>% as.data.table()
+        
+        
+        # Usó una lista para acceder a diferentes tablas desde un solo objeto reactivo
+        list(data_train = data_train, data_test = data_test, traning_time = table_training_time, table_importance = table_importance, results = table_results)
+        
+      })
+    }
+  }
+  
+  ## ---------------------------------------------------------------------------- LAnzar APP  -----------------------------------
+  # Ensamblar la interfaz de usuario y los lados del SERVIDOR dentro de shinyApp 
+  shinyApp(
+    ui = argonDashPage(
+      useShinyjs(),  
+      title = "DBancarios Machine Learning",
+      author = "Sam",
+      description = "Uso de app de Datos Bancarios",
+      navbar = argonNav,
+      header = argonHeader,
+      footer = argonFooter
+    ),
+    server = server
+  )
+  
+}
+
+```
+
+```{r echo = FALSE, message=FALSE, warning=FALSE}
+TLPR <- read.csv(file = 'predictionridge.csv')
+Fecha <- seq(as.Date("1995/6/1"), as.Date("2020/11/28"), by = "month")
+ridge<-cbind(TLPR, Fecha)
+#Ver la aplicación
+bancariosML(data = ridge,y = "Remesas",framework = "spark")
+```
+
+
