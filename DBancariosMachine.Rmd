@@ -6,7 +6,7 @@ output:
 resource_files:
 - predictionridge.csv
 ---
-Nuevo
+
 ```{r echo = FALSE, message=FALSE, warning=FALSE}
 bancariosML <- function(data = data,y,framework = "h2o", share_app = FALSE,port = NULL){
   
