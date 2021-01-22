@@ -31,7 +31,7 @@ bancariosML <- function(data = data,y,framework = "h2o", share_app = FALSE,port 
   
   ## ---------------------------------------------------------------------------- Inicializando -----------------------------------
   
-  # NO ESTOY DE ACUERDO 
+  # Elegir tipo de framework
   if(!(framework %in% c("h2o","spark"))){stop("El framework de Machine Learning debe seleccionarse entre h2o o spark")}
   
   #Convertir el dataset elegido como input en un objeto data.table 
