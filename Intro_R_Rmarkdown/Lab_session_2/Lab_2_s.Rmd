@@ -1,0 +1,228 @@
+---
+title: "Laboratorio de Macroeconomía: Sesión II"
+author: "Samuel D. Restrepo"
+header-includes:
+   - \usepackage[utf8]{inputenc}
+   - \usepackage[spanish]{babel}
+   - \usepackage{graphicx}
+output:
+  pdf_document: default
+  html_notebook: default
+  word_document: default
+  html_document:
+    df_print: paged
+---
+
+\maketitle
+
+\tableofcontents
+\listoftables
+
+\newpage
+
+\section{Descripción}
+
+En esta sesión modificaremos fragmentos de uno de los documentos del curso con ccódigos de \LaTeX, aprenderemos a crear el índice y lista de tablas de nuestro documento de manera automática, haremos regresiones y generaremos tablas profesionales para estas regresiones usando dos librerías distintas y entenderemos cómo graficar varias series en un mismo plano, además de una breve introducción a la manipulación de bases de datos. \footnote{Esta es una nota al pie de pagina}.
+
+\textbf{En caso de tener dificultades para réplicar los resultados, informar a la siguiente dirección de correo electrónico: srestrepo@colmex.mx}
+
+El consumo es una de las variables macroeconómicas más importantes. En esta parte del curso se describen los enfoques tradicionales con los que se analiza el consumo.	
+
+\section{La hipótesis del consumo permanente, el caso sin incertidumbre}
+
+Referencia: Romer, Sección 8.1.
+
+Empecemos analizando un problema sencillo, el de encontrar el consumo optimo para un agente que quiere maximizar su utilidad total a lo largo de varios periodos de consumo.
+
+\begin{equation}
+U = \sum_{t=1}^{T} u(C_t)
+\end{equation}
+
+Suponemos que $u'>0$y que $u''<0$, es decir que el consumidor nunca deja de querer mas consumo, pero que la utilidad que recibe por cada unidad adicional de consumo es menor a la que recibió por la unidad anterior, es decir suponemos que tiene utilidad marginal decreciente.
+
+Si el consumidor no estuviera restringido de alguna manera entonces escogería $C_t=\infty$ en todos los periodos. Para representar la restricción presupuestal que enfrenta, vamos a decir que empieza con una riqueza dada $A_0$ y que recibe ingresos de  $Y_t$ en cada periodo $t=1..T$, y que la suma de su gasto en consumo tiene que ser igual a la suma de su riqueza inicial $W_0$ y la suma de su ingreso en distintos periodos de su vida $Y_t$:
+
+\begin{equation}
+\sum_{t=1}^{T} C_t  \leq W_0+\sum_{t=1}^{T} Y_t
+\end{equation}
+
+
+Simplificamos el análisis del problema fijándonos que, dado que $u'>0$, ``la restricción presupuestal está activa'', por lo que podemos escribir una igualdad, en lugar de una desigualdad:
+
+\begin{equation}
+\sum_{t=1}^{T} C_t = W_0+\sum_{t=1}^{T} Y_t
+\end{equation}
+
+\subsection{Comportamiento}
+\textbf{¿Cómo podemos utilizar este modelo?} Vamos a extraer predicciones de él. Para ello,  empezamos por "resolverlo'', es decir, vamos a caracterizar las acciones óptimas de los agentes, dados los supuestos. \textit{Para resolver el modelo vamos a escribir el problema como un "Lagrangiano'', es decir la suma de la función objetivo, y las restricciones con un ``multiplicador de Lagrange''}.
+
+Lagrangiano:
+
+\begin{equation}
+L(C_t,\lambda) =\sum_{t=1}^{T} u(C_t) + \lambda (A+\sum_{t=1}^{T} Y_t - \sum_{t=1}^{T} C_t)
+\end{equation}
+
+
+Las condiciones de primer orden (CPOs) son:
+
+\begin{equation}
+\frac{\partial L}{\partial \lambda}= A+\sum_{t=1}^{T} Y_t - \sum_{t=1}^{T} C_t =0
+\end{equation}
+
+
+$dL/dC_t= u'(C_t) - \lambda=0$
+
+Esta ecuación nos permite ``conectar'' las distintas decisiones de consumo, de tal forma que sean consistentes unas con otras. La ecuación nos dice que, para estar en un punto óptimo, tiene que ser cierto que la utilidad marginal de un poco más de consumo sea igual en todos los periodos. ¿Por qué sucede esto? En el modelo es posible transferir fácilmente el consumo de cualquier periodo a cualquier otro. Si la utilidad marginal fuera mayor en un periodo A que en uno B, sería muy fácil mandar consumo del periodo B al A, aumentando la utilidad total.
+
+Por lo tanto $C_i=C_j$ para todo i,j, y además, $C_t= (A+\sum_{t=1..T} Y_t)/T$. En otras palabras, nuestro modelo dice que los agentes deberían consumir lo mismo en todos los periodos de su vida. Esta conclusión, hasta cierto punto obvia, es útil como punto de partida para ordenar nuestras distintas intuiciones de los determinantes de consumo, de tal forma que decimos la teoría <X> predice que {\it en lugar de ser constante como en la HIP} el consumo se comporta de forma <Y>, puesto que {\it en lugar de los supuestos de la HIP}, supone que <Z>. 
+
+
+
+\subsection{Implicaciones}
+
+Friedman acuño los términos "ingreso permanente" vs. "ingreso transitorio" para describir las implicaciones de imaginar que los consumidores se comportan como sugiere el modelo.
+
+En particular, nótese que este modelo implica  que el patrón de consumo es independiente del patrón de ingreso, pero el patrón de ahorro depende totalmente del patrón de ingreso.
+
+Esta es la "Permanent Income Hypothesis'' de Modigliani y Brumberg, 1954 y de Friedman, 1957, y que podemos escribir como  ``HIP'' en español. 
+
+\subsection{¿Qué es el ahorro?}
+
+En este modelo el ahorro es consumo futuro, (puede ser un regalo para otras generaciones, pero es consumo futuro de todas maneras). Desde la perspectiva de este modelo, aseveraciones como "los pobres no ahorran por que no tienen ingreso'', o ``las personas compiten para demostrar que pueden consumir lo mismo que el vecino'', no hacen sentido por que consumir más ahora quiere decir consumir menos después. En la medida que dicho comportamiento se verifique en los datos, entonces es evidencia en contra de la HIP como un buen modelo del comportamiento humano.
+
+\subsection{Aplicación Empírica}
+
+J.M.Keynes  afirmaba que el consumo era una función lineal del ingreso y que a mayor ingreso absoluto mayor ahorro absoluto.
+
+La evidencia es que el consumo crece linealmente con el ingreso, en corte transversal  (coeficiente <1), pero a lo largo del tiempo, en un país, el consumo es de hecho proporcional al ingreso, sin una intersección mayor a 0. Diferentes grupos tienen funciones de consumo diferentes...
+
+Ahora, imaginemos que estimamos una regresión, $C_{it}=a+bY_{it}+e_{it}$, entonces:
+
+$$\hat{b}=Cov(Y,C)/Var (Y) = Cov(Y_t+Y_p,Y_p)/Var(Y_t+Y_p) = Var(Y_p)/Var(Y_p+Y_t)$$
+
+$$\hat{a}=\bar{C}-\hat{b}\bar{Y}=Y_p-b(\bar{Y_p}+\bar{Y_t})=(1-b) \bar{Y_p}$$
+
+Entonces tenemos lo siguiente:
+
+La pendiente de la función de consumo depende de la variación relativa entre el ingreso permanente y el ingreso transitorio. Cuando la variación presente en las observaciones que están en la muestra corresponde sobretodo a la parte temporal (por ejemplo, si los datos provienen de distintas observaciones de una misma familia), entonces se espera obtener una $\hat{b}$ baja, cuando la variación corresponde sobretodo a la parte permanente (por ejemplo, si los datos provienen de distintas décadas para un país), se espera una $\hat{b}$ alta.
+
+ Ejemplo:
+
+ Q: Suponga que tiene dos bases de datos. En la primera "Ex-alumnos Colmex'' se describe las calificaciones obtenidas, la ocupación, el ingreso y el consumo a entre 2000 y 2010 de estudiantes de Economía del Colmex en 2008. En la segunda, ``Inscripciones Colmex''se describe, para el mismo grupo de alumnos, el ingreso de su primer trabajo pre-colmex, y su consumo en el mes previo a enrolarse en el Colmex. Suponga que en ambas bases la variación es muy grande, el máximo ingreso es hasta 10 veces mayor al ingreso menor, e igualmente para el consumo hay grandes variaciones. 
+
+ Pregunta A) ¿En qué base de datos crees que el ingreso sea mejor indicador del ingreso permanente?: En ambas bases de datos la variación observada del ingreso y en el consumo corresponde en parte en variación de tipo permanente y en parte a otras fuentes. E.g. Aunque en la primera base tal vez algunos alumnos tuvieron buena suerte y empezaron en un buen empleo, para el 2010 lo habían perdido, por lo que el ingreso 2000-2010 no es representativo de su ingreso permanente, pero parte de la variación sí representa más o menos dedicación permanente y habilidad permanente y preferencias permanentes por un trabajo con poca o mucha remuneración; de la misma forma en la segunda base, parte de la variación también es por pura suerte y temporal, pero parte también es resultado de diferencias permanentes en los agentes y por tanto en cálculos diferentes del ingreso esperado a lo largo de la vida. A pesar de que ambos tipos de variación están presentes en ambas bases de datos, está claro que la primera contiene información de una etapa más determinante de la vida profesional y se extiende por un periodo más largo en el que la suerte juega un rol menos importante. \textbf  {Por tanto, está claro que es en la primera base de datos en la que los datos de ingreso debería ser ``muy informativos'' sobre el ingreso permanente de cada individuo. }
+
+ Pregunta B) ¿En qué base de datos esperas observar que un ingreso más alto se refleje prácticamente uno-a-uno en un consumo más alto? En ambas bases el ingreso y el consumo van a ser diferentes uno de otro, para cada individuo. No obstante, \textit {  de acuerdo a la teoría} el consumo es función mayormente del ingreso permanente. \textbf {Por tanto, a pesar de que en ambas bases de datos esperamos observar que el mayor ingreso está asociado a mayor consumo, y a la vez que la relación no sea uno a uno, esperaríamos que en la primera base de datos un ingreso mas alto en X pesos estará reflejado en un consumo más alto en una cantidad parecida a X, mientras que en la segunda base de datos esperaríamos una relación menos cercana entre las dos variables.}
+
+\section{Evidencia empírica en México (datos cualesquiera)}
+
+\subsection{Gráficas serie de Consumo}
+
+```{r librerias, include=FALSE}
+library(stargazer)
+library(knitr)
+library(kableExtra)
+library(viridis)
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+library(scales)
+library(quantmod)
+library(texreg)
+library(tinytex)
+```
+
+```{r cargando, include=FALSE}
+#Recuerden determinar su directorio de trabajo
+# setwd("")
+data <- read.csv(file = 'predictionridge.csv')
+Fecha <- seq(as.Date("1995/6/1"), as.Date("2020/11/28"), by = "month")
+ridges<-cbind(data, Fecha)
+names(ridges) <- tolower(names(ridges))
+```
+
+```{r bases, include=FALSE}
+#uso de la librería dplyr para manipular bases de datos
+df <- ridges %>%
+  dplyr::select(fecha, consumo, inversion, tiie28, inpc ) %>%
+  gather(key = "Variables", value = "value", -fecha)
+
+```
+
+```{r figura, echo=FALSE, message=FALSE, warning=FALSE }
+#Algunos colores 
+#   scale_color_manual(values = c("#F0E442", "#0072B2", "#D55E00", "#CC79A7"))
+# "#F0E442", "#0072B2", "#D55E00", "#CC79A7"
+
+#A continuación generamos una gráfica y le asignamos un nombre. En este ejemplo es "Ridgee"
+Ridgee <- ggplot(df, aes(x = fecha, y = value)) +  
+  scale_color_viridis(discrete = TRUE) + 
+  geom_line(aes(color = Variables), size = 1) +
+  theme_minimal() + labs(x = "Periodo",
+    y = "Variables",
+    title = "El Consumo y otras variables en México ",
+    subtitle = "(1995-2020)")
+```
+
+```{r plot, echo=FALSE, message=FALSE, warning=FALSE}
+plot(Ridgee) #ploteamos nuestra figura
+```
+\newpage
+
+\subsection{Tablas de regresiones (Pueden posicionar sus tablas de acuerdo con sus gustos y también el tamaño, revisar la documentación.)}
+
+```{r regresion, results = 'asis', echo = FALSE}
+
+#Creamos dos regresiones MCO con nuestros datos de la base ridges
+reg1 <- lm(consumo ~ remesas + inversion + tiie28, data=ridges)
+reg2 <- lm(consumo ~ remesas + inversion, data=ridges)
+```
+```{r regresion2, results = 'asis', echo = FALSE, message=FALSE, warning=FALSE}
+#generamos nuestra primer tabla profesional
+stargazer(reg1, reg2,
+          type="latex",
+          title= "Tabla de prueba",
+          header=FALSE)
+```
+
+
+```{r regresion4, results = 'asis', echo = FALSE, message=FALSE, warning=FALSE}
+#Tabla mejorada
+stargazer(reg1, reg2,
+          title= "Tabla de Regresión (librería stargazer)",
+          header = FALSE,
+          dep.var.caption = "Variable Dependiente",
+          dep.var.labels = "Consumo",
+          covariate.labels = c("Remesas", "Inversión", "Tasa de Interés"),
+          notes.label = "P-valor",
+          type="latex",
+          table.placement = "!htbp")
+#h", "t","b", "p", "!", "H"
+```
+
+```{r regresionn, results = 'asis', echo = FALSE, message=FALSE, warning=FALSE}
+#Tabla parecida a la anterior pero con el estilo de American Economic Review
+stargazer(reg1, reg2,
+          style="aer",
+          title= "Tabla de Regresión, Estilo de American Economic Review (librería stargazer)",
+          header = FALSE,
+          dep.var.caption = "Variable Dependiente",
+          dep.var.labels = "Consumo",
+          covariate.labels = c("Remesas", "Inversión", "Tasa de Interés"),
+          notes.label = "P-valor",
+          type="latex",
+          table.placement = "!htbp")
+#h", "t","b", "p", "!", "H"
+```
+\newpage
+```{r, message=FALSE, warning=FALSE, results='asis', echo=FALSE}
+texreg(reg1, #Si son más modelos ponemos list(m1,m2,m3)
+               digits = 3, #dígitos de la tabla
+               float.pos="h!", #permite dejar la tabla fija en su lugar
+               use.packages = FALSE,
+               caption = "Tabla de Regresión (librería texreg)", #título del modelo
+               custom.coef.names=c("(Intercepto)", #Podemos asignar nombres a los coeficientes
+                              "Remesas", "Inversión", "Tasa de Interés"),
+               custom.model.names = "Modelo 1") #si son más modelos = c("Modelo1","Modelo2")
+```
