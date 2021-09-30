@@ -4,4 +4,6 @@ El estudio del Machine Learning ha venido ganando importancia en los últimos a�
 
 Además de este repositorio, puedes ver la aplicación en el siguiente link: https://samuel-restrepo.shinyapps.io/DBancariosMachines/
 
+La programación está inspirada en el paquete shinyML (publicado en CRAN, 2019) de donde soy contributor. Por favor, ver el repositorio original para mas detalles: https://github.com/JeanBertinR/shinyML
+
 Samuel D. Restrepo
