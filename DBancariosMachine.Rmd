@@ -43,7 +43,7 @@ bancariosML <- function(data = data,y,framework = "h2o", share_app = FALSE,port 
   # Reemplace puntos en la y
   y <- gsub("\\.","_",y)
   
-  # Regrese un error si y no está contenida en las columnas de la base de datosReturn an error 
+  # Regrese un error si y no está contenida en las columnas de la base de datos
   if (!(y %in% colnames(data))){
     stop("La variable y debe estar contenida en la base de datos")
   }
